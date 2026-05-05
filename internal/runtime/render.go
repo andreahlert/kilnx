@@ -14,6 +14,7 @@ import (
 
 	"github.com/kilnx-org/kilnx/internal/database"
 	"github.com/kilnx-org/kilnx/internal/parser"
+	"github.com/kilnx-org/kilnx/internal/pathutil"
 )
 
 // Template directives:
@@ -282,6 +283,9 @@ func renderHTML(content string, ctx *renderContext) string {
 	if ctx.i18n != nil {
 		result = expandTranslations(result, ctx)
 	}
+
+	// Step 0.5: Expand action= attributes to htmx equivalents
+	result = expandActionAttributes(result, ctx)
 
 	// Step 1: Replace each {csrf} with a unique token (one per occurrence for multi-form pages)
 	for strings.Contains(result, "{csrf}") {
@@ -1554,4 +1558,81 @@ func splitArgPairs(s string) []string {
 		tokens = append(tokens, cur.String())
 	}
 	return tokens
+}
+
+// actionAttrRe matches action="/path" only inside <button>, <a>, or <input>
+// tags. It deliberately excludes <form action="..."> so native form submission
+// keeps working. Captures: 1=tag name, 2=attrs before action, 3=path,
+// 4=attrs after action.
+var actionAttrRe = regexp.MustCompile(`<(button|a|input)\b([^>]*?)\saction="([^"]+)"([^>]*)>`)
+
+// expandActionAttributes replaces action="/path" on supported elements with
+// hx-post/hx-delete/etc. It uses the matching action block's Method (always
+// set by parser, defaults to POST for `action ...`) to pick the verb. For
+// non-GET verbs a CSRF placeholder ({csrf}) is emitted via hx-vals; the
+// surrounding pipeline replaces {csrf} with a real token. <form> elements
+// are intentionally not rewritten.
+func expandActionAttributes(content string, ctx *renderContext) string {
+	if len(ctx.actions) == 0 {
+		return content
+	}
+	return actionAttrRe.ReplaceAllStringFunc(content, func(match string) string {
+		parts := actionAttrRe.FindStringSubmatch(match)
+		if len(parts) < 5 {
+			return match
+		}
+		tag, before, path, after := parts[1], parts[2], parts[3], parts[4]
+
+		// Find matching action
+		var matchedAction *parser.Page
+		for i := range ctx.actions {
+			if pathutil.Match(ctx.actions[i].Path, path) {
+				matchedAction = &ctx.actions[i]
+				break
+			}
+		}
+		if matchedAction == nil {
+			return match // unknown action, leave for analyzer to catch
+		}
+
+		verb := inferHTTPVerb(matchedAction)
+
+		var attrs []string
+		switch verb {
+		case "GET":
+			attrs = append(attrs, fmt.Sprintf(`hx-get="%s"`, path))
+		case "POST":
+			attrs = append(attrs, fmt.Sprintf(`hx-post="%s"`, path))
+		case "PUT":
+			attrs = append(attrs, fmt.Sprintf(`hx-put="%s"`, path))
+		case "PATCH":
+			attrs = append(attrs, fmt.Sprintf(`hx-patch="%s"`, path))
+		case "DELETE":
+			attrs = append(attrs, fmt.Sprintf(`hx-delete="%s"`, path))
+		}
+
+		// CSRF: required for all non-GET verbs (handleAction validates it).
+		// Use the {csrf} placeholder; it is replaced with a fresh token in
+		// step 1 of renderHTML, after this expansion runs.
+		if verb != "GET" {
+			attrs = append(attrs, `hx-vals='{"_csrf":"{csrf}"}'`)
+		}
+
+		// No hx-target / hx-swap: omit so htmx defaults apply. The earlier
+		// data-action-scope mechanism was incomplete; revisit when adding
+		// scoped swap support and a real swap-directive grammar.
+
+		return fmt.Sprintf("<%s%s %s%s>", tag, before, strings.Join(attrs, " "), after)
+	})
+}
+
+// inferHTTPVerb returns the HTTP verb declared on an action block.
+// Method is always set by the parser (default "POST" for `action ...`,
+// see parser.parseAction), so this is a thin uppercase wrapper kept for
+// clarity at call sites.
+func inferHTTPVerb(action *parser.Page) string {
+	if action.Method != "" {
+		return strings.ToUpper(action.Method)
+	}
+	return "POST"
 }

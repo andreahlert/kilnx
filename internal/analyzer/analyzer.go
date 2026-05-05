@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/kilnx-org/kilnx/internal/parser"
+	"github.com/kilnx-org/kilnx/internal/pathutil"
 )
 
 // Diagnostic represents a compile-time finding from static analysis.
@@ -135,6 +136,7 @@ func Analyze(app *parser.App) []Diagnostic {
 	diags = append(diags, checkCustomManifestRefs(app)...)
 	diags = append(diags, checkFragmentComponents(app)...)
 	diags = append(diags, checkTranslationParams(app)...)
+	diags = append(diags, checkActionAttributes(app)...)
 
 	return diags
 }
@@ -1570,6 +1572,78 @@ func checkTranslationParams(app *parser.App) []Diagnostic {
 				}
 			}
 		}
+	}
+
+	return diags
+}
+
+// checkActionAttributes validates that action="/path" attributes on
+// <button>, <a> and <input> elements reference an existing action block
+// (or page route, for forms posting to a page). The regex is anchored to
+// these tag names so native <form action="..."> never trips this check.
+func checkActionAttributes(app *parser.App) []Diagnostic {
+	var diags []Diagnostic
+
+	// Build route indexes for actions and pages.
+	actionPaths := make([]string, 0, len(app.Actions))
+	for _, a := range app.Actions {
+		actionPaths = append(actionPaths, a.Path)
+	}
+	pagePaths := make([]string, 0, len(app.Pages))
+	for _, p := range app.Pages {
+		pagePaths = append(pagePaths, p.Path)
+	}
+
+	// Mirror the runtime regex (render.go: actionAttrRe): only flag action=
+	// usage on button/a/input. <form> is excluded by design.
+	actionAttrRe := regexp.MustCompile(`<(?:button|a|input)\b[^>]*?\saction="([^"]+)"`)
+
+	matchesAny := func(routes []string, path string) bool {
+		for _, r := range routes {
+			if pathutil.Match(r, path) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var scanNodes func([]parser.Node, string)
+	scanNodes = func(nodes []parser.Node, ctx string) {
+		for _, node := range nodes {
+			if node.Type == parser.NodeHTML {
+				for _, match := range actionAttrRe.FindAllStringSubmatch(node.HTMLContent, -1) {
+					path := match[1]
+					if matchesAny(actionPaths, path) {
+						continue
+					}
+					// Suppress diagnostic when the path matches a page
+					// route. Buttons/links pointing at a page are valid
+					// (e.g. an htmx GET to a page fragment).
+					if matchesAny(pagePaths, path) {
+						continue
+					}
+					diags = append(diags, Diagnostic{
+						Level:   "error",
+						Message: fmt.Sprintf("action attribute references unknown route '%s'", path),
+						Context: ctx,
+					})
+				}
+			}
+			scanNodes(node.Children, ctx)
+		}
+	}
+
+	for _, p := range app.Pages {
+		scanNodes(p.Body, "page "+p.Path)
+	}
+	for _, f := range app.Fragments {
+		scanNodes(f.Body, "fragment "+f.Path)
+	}
+	for _, a := range app.Actions {
+		scanNodes(a.Body, "action "+a.Path)
+	}
+	for _, a := range app.APIs {
+		scanNodes(a.Body, "api "+a.Path)
 	}
 
 	return diags
