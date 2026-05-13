@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Import path** | `github.com/kilnx-org/kilnx/internal/lexer` |
-| **Source last touched** | `d373018` (2026-05-13) |
+| **Source last touched** | `1ced616` (2026-05-13) |
 | **Doc last touched** | `5da8498` (2026-05-08) |
 
 
@@ -55,6 +55,22 @@ TokenType identifies the lexical category of a Token (keyword, string,
 indent, etc.). Values are defined as the Token* constants below.
 
 ## Functions
+
+### `FieldConstraints`
+
+```go
+func FieldConstraints() []string
+```
+
+FieldConstraints returns the sorted list of recognized field constraint keywords.
+
+### `FieldTypes`
+
+```go
+func FieldTypes() []string
+```
+
+FieldTypes returns the sorted list of recognized field type keywords.
 
 ### `IsFieldConstraint`
 
