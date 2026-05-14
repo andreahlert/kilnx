@@ -288,6 +288,40 @@ func TestExtractSlots(t *testing.T) {
 	}
 }
 
+// TestSlotBlockFormInsideEach verifies the inside-each rendering path:
+// caller is {{each users}}{{Frag}}...{{/Frag}}{{end}}, so each iteration
+// invokes the block-form fragment with the current row visible to the slot
+// body (refs like {name} should resolve against the each row, not the
+// fragment).
+func TestSlotBlockFormInsideEach(t *testing.T) {
+	card := &parser.Page{
+		Path: "Card",
+		Body: []parser.Node{
+			{Type: parser.NodeHTML, HTMLContent: `<div class="card">{{slot}}</div>`},
+		},
+		FragmentArgs: []parser.FragmentArg{},
+	}
+	ctx := &renderContext{
+		fragmentComponents: map[string]*parser.Page{"Card": card},
+		queries: map[string][]database.Row{
+			"users": {
+				{"name": "Alice"},
+				{"name": "Bob"},
+			},
+		},
+		paginate:          map[string]PaginateInfo{},
+		querySourceModels: map[string]string{},
+		customManifests:   map[string]*parser.CustomFieldManifest{},
+		queryParams:       map[string]string{},
+	}
+	content := `{{each users}}{{Card}}<p>{name}</p>{{/Card}}{{end}}`
+	got := renderHTML(content, ctx)
+	want := `<div class="card"><p>Alice</p></div><div class="card"><p>Bob</p></div>`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFindFragmentBlockEnd verifies the balanced scanner counts nested same-
 // name opens correctly.
 func TestFindFragmentBlockEnd(t *testing.T) {

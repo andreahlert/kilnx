@@ -1158,6 +1158,16 @@ func tryExpandFragmentAt(content string, openStart, openEnd int, ctx *renderCont
 		callerBody = ""
 	}
 
+	// Pre-resolve caller-scope field refs in slot content. Without this,
+	// `{name}` inside a block-form call rendered from within {{each users}}
+	// would later resolve against the fragment's scope (where currentRow is
+	// nil) and fall back to queries[0], yielding the wrong row's value on
+	// every iteration. interpolateRow only touches `{field}` patterns, so
+	// named-slot wrappers `{{slot name="X"}}...{{/slot}}` are preserved.
+	if callerBody != "" && ctx.currentRow != nil {
+		callerBody = interpolateRow(callerBody, ctx.currentRow, ctx)
+	}
+
 	fragHTML := resolveFragmentBody(frag, callerBody)
 	if fragHTML == "" {
 		return "", consumedEnd
